@@ -205,8 +205,8 @@ def calculate_dynamic_position(context, symbol):
     if atr == 0 or current_price == 0:  # 异常值保护
         return 0
     position_value = risk_budget / (atr * 1.5)
-    target_shares = int(position_value / current_price)
-    return (target_shares // 100) * 100  # 按整手数调整
+    target_shares = (int(position_value / current_price)) / 100 * 100 # 按整手数调整
+    return target_shares 
 
 
 # 使用示例

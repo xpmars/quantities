@@ -134,7 +134,7 @@ def on_bar(context, bars):
     # 修改on_bar中的交易量计算（新增动态交易量）
     trade_value = min(available_cash * context.trade_cash_ratio,
                     calculate_dynamic_position(context, symbol) * current_price) 
-    print(f"\n[本次交易量] 计划交易量={available_cash * context.trade_cash_ratio:.2f}元 | 动态交易量={calculate_dynamic_position(context, symbol) * current_price:.2}元 | 实际交易量={trade_value}")
+    print(f"[本次交易量] 计划交易量={available_cash * context.trade_cash_ratio:.2f}元 | 动态交易量={calculate_dynamic_position(context, symbol) * current_price:.2f}元 | 实际交易量={trade_value:.2f}")
 
 
     close = context.data(symbol=symbol,

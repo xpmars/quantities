@@ -3,7 +3,7 @@
     "activeCommit": 0,
     "commits": [
         {
-            "activePatchIndex": 12,
+            "activePatchIndex": 15,
             "patches": [
                 {
                     "date": 1744185176721,
@@ -56,6 +56,18 @@
                 {
                     "date": 1744249038722,
                     "content": "Index: \n===================================================================\n--- \n+++ \n@@ -181,9 +181,9 @@\n                        fields='high,low,close')\r\n     high = data['high']\r\n     low = data['low']\r\n     close = data['close']\r\n-    \r\n+    prev_close = np.roll(close, shift=1)\r\n     # 计算真实波幅TR\r\n     tr = np.zeros(len(data))\r\n     for i in range(1, len(data)):\r\n         tr[i] = max(\r\n"
+                },
+                {
+                    "date": 1744253196400,
+                    "content": "Index: \n===================================================================\n--- \n+++ \n@@ -205,9 +205,9 @@\n     if atr == 0 or current_price == 0:  # 异常值保护\r\n         return 0\r\n     position_value = risk_budget / (atr * 1.5)\r\n     target_shares = int(position_value / current_price)\r\n-    return (target_shares // 100) * 100  # 按整手数调整\r\n+    return (target_shares / 100) * 100  # 按整手数调整\r\n \r\n \r\n # 使用示例\r\n if __name__ == \"__main__\":\r\n"
+                },
+                {
+                    "date": 1744253268456,
+                    "content": "Index: \n===================================================================\n--- \n+++ \n@@ -204,9 +204,9 @@\n     # 动态仓位计算（整手数处理）\r\n     if atr == 0 or current_price == 0:  # 异常值保护\r\n         return 0\r\n     position_value = risk_budget / (atr * 1.5)\r\n-    target_shares = int(position_value / current_price)\r\n+    target_shares = (int(position_value / current_price)) / 100 * 100\r\n     return (target_shares / 100) * 100  # 按整手数调整\r\n \r\n \r\n # 使用示例\r\n"
+                },
+                {
+                    "date": 1744253311052,
+                    "content": "Index: \n===================================================================\n--- \n+++ \n@@ -204,10 +204,10 @@\n     # 动态仓位计算（整手数处理）\r\n     if atr == 0 or current_price == 0:  # 异常值保护\r\n         return 0\r\n     position_value = risk_budget / (atr * 1.5)\r\n-    target_shares = (int(position_value / current_price)) / 100 * 100\r\n-    return (target_shares / 100) * 100  # 按整手数调整\r\n+    target_shares = (int(position_value / current_price)) / 100 * 100 # 按整手数调整\r\n+    return target_shares \r\n \r\n \r\n # 使用示例\r\n if __name__ == \"__main__\":\r\n"
                 }
             ],
             "date": 1744185176721,
