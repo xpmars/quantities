@@ -3,8 +3,7 @@ from __future__ import print_function, absolute_import, unicode_literals
 from gm.api import *
 import math
 import datetime
-import pandas as pd
-import numpy as np
+
 from QTUtils import *
 
 
@@ -18,6 +17,9 @@ from QTUtils import *
 
 
 def init(context):
+    context.risk_ratio = 0.02  # 单笔风险敞口2%
+    context.atr_period = 14    # ATR计算周期
+
     # 设置标的股票
     context.all_symbols = ['SHSE.600000','SHSE.688165']
     # 用于判定第一个仓位是否成功开仓
@@ -29,7 +31,7 @@ def init(context):
     # 初始资金比例（总仓位比例）
     context.total_cash_ratio = 0.25  # 总仓位占账户资金的50%
     # 每次交易资金比例（日内回转比例）
-    context.trade_cash_ratio = 0.1  # 每次交易账户可用资金的20%
+    context.trade_cash_ratio = 0.1  # 每次交易账户可用资金的10%
     # 使用的频率，60s为1分钟bar，300s为5分钟bar
     context.frequency = '300s'
     # 回溯数据长度（计算MACD)
@@ -39,11 +41,13 @@ def init(context):
               frequency=context.frequency,
               count=context.periods_time,
               fields='symbol,eob,close')
-    #  # 增加对1d频率数据的订阅
-    # subscribe(symbols=context.all_symbols,
-    #           frequency='1d',
-    #           count=2,
-    #           fields='symbol,close')
+    # 订阅标的的日线数据，窗口长度设为15（14周期ATR+1）
+    subscribe(symbols=context.all_symbols,
+              frequency='1d',
+              count=15)
+
+    # 初始化ATR值存储到上下文
+    context.atr_value = None
 
     schedule(schedule_func=algo, date_rule='1d', time_rule='14:55:00')
 
@@ -61,7 +65,11 @@ def algo(context):
         if not current_price:
             continue
             
-        target_value = account.cash['nav'] * context.total_cash_ratio
+        # 获取账户总资产
+        available_cash = account.cash['nav']
+        # 当日可交易总资金
+        target_value = available_cash * context.total_cash_ratio 
+        # 当日交易股票数
         target_vol = math.ceil((target_value / current_price) / 200) * 200  # 整手数
         
         # 执行调仓
@@ -81,8 +89,7 @@ def algo(context):
                         price=current_price*0.995,
                         position_effect=PositionEffect_Close)
     
-    QTUtils.eod_position_summary(context)
-
+    # eod_position_summary(context)
 
 
 # 订阅行情
@@ -95,11 +102,13 @@ def on_bar(context, bars):
     current_price = bar['close']
     # 获取账户总资金
     total_cash = account.cash['nav']
-    target_value = total_cash * context.total_cash_ratio # 可交易总资金
-    
+    # 获取账户可用资金
+    available_cash = account.cash['available']
+    # 当日可交易总资金
+    target_value = available_cash * context.total_cash_ratio 
 
     # 初始建仓
-    if context.first[symbol] == 0 and current_price>0:
+    if context.first[symbol] == 0 and current_price>0 :
         context.first[symbol] = 1
         order_value(symbol=symbol, 
                    value=target_value,
@@ -109,31 +118,38 @@ def on_bar(context, bars):
         print(f'{context.now}：{symbol}建底仓，投入资金={target_value:.2f}')
         return
 
-    # 获取持仓
-    position = list(filter(lambda x:x['symbol']==symbol,get_position()))
-    if not position:  # 新增空值判断
-        print(f"{symbol} 无持仓，跳过交易逻辑")
-        return
-    
+#     # 计算ATR
+#     atr = calculate_ATR(context, bars, period=14)
+#     # 存储当前ATR值到上下文
+#     context.atr_value = atr
+#    # 打印带日期的ATR值（保留2位小数）
+#     print(f"[{context.now}] {bars[0]['symbol']} ATR值: {atr:.4f}")  # 修改这里
+
     # 日内交易
-    available_cash = context.account().cash['available']
+    # 本次（单次）可交易总资金
     trade_value = available_cash * context.trade_cash_ratio
-    trade_volume = int(trade_value / current_price) if current_price>0 else 0
+    trade_volume = int(trade_value / current_price) if current_price > 0 else 0
     
+
+    # 修改on_bar中的交易量计算（新增动态交易量）
+    trade_value = min(available_cash * context.trade_cash_ratio,
+                    calculate_dynamic_position(context, symbol) * current_price) 
+    print(f"\n[本次交易量] 计划交易量={available_cash * context.trade_cash_ratio:.2f}元 | 动态交易量={calculate_dynamic_position(context, symbol) * current_price:.2}元 | 实际交易量={trade_value}")
+
+
     close = context.data(symbol=symbol,
                         frequency=context.frequency,
                         count=context.periods_time,
                         fields='close')['close'].values
     dif, dea, _ = MACD(close)
-    
-    if dif[-2] <= dea[-2] and dif[-1] > dea[-1]:  # 金叉
+    if dif[-2] <= dea[-2] and dif[-1] > dea[-1] :  # 日内金叉
         if trade_volume >0:
             order_value(symbol=symbol,
                        value=trade_value,
                        side=OrderSide_Buy,
                        order_type=OrderType_Market,
                        position_effect=PositionEffect_Open)
-    elif dif[-2] >= dea[-2] and dif[-1] < dea[-1]:  # 死叉
+    elif dif[-2] >= dea[-2] and dif[-1] < dea[-1]:  # 日内死叉
         if trade_volume >0:
             order_value(symbol=symbol,
                        value=trade_value,
@@ -141,41 +157,6 @@ def on_bar(context, bars):
                        order_type=OrderType_Market,
                        position_effect=PositionEffect_Close)
 
-
-def EMA(S: np.ndarray, N: int) -> np.ndarray:
-    '''指数移动平均,为了精度 S>4*N  EMA至少需要120周期     
-    alpha=2/(span+1)
-
-    Args:
-        S (np.ndarray): 时间序列
-        N (int): 指标周期
-
-    Returns:
-        np.ndarray: EMA
-    '''
-    return pd.Series(S).ewm(span=N, adjust=False).mean().values
-
-#原始值：SHORT: int = 12,LONG: int = 26,M: int = 9
-def MACD(CLOSE: np.ndarray,
-         SHORT: int = 6,
-         LONG: int = 38,
-         M: int = 6) -> tuple:
-    '''计算MACD
-    EMA的关系，S取120日
-
-    Args:
-        CLOSE (np.ndarray): 收盘价时间序列
-        SHORT (int, optional): ema 短周期. Defaults to 12.
-        LONG (int, optional): ema 长周期. Defaults to 26.
-        M (int, optional): macd 平滑周期. Defaults to 9.
-
-    Returns:
-        tuple: _description_
-    '''
-    DIF = EMA(CLOSE, SHORT) - EMA(CLOSE, LONG)
-    DEA = EMA(DIF, M)
-    MACD = (DIF - DEA) * 2
-    return DIF, DEA, MACD
 
 
 def on_order_status(context, order):
