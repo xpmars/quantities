@@ -209,6 +209,29 @@ def calculate_dynamic_position(context, symbol):
     return target_shares 
 
 
+
+def check_timing_signal(context, symbol):
+    """三重验证择时信号"""
+    # 1. 趋势判定（双均线）
+    close = context.data(symbol=symbol, frequency=context.frequency, 
+                        count=context.trend_period, fields='close')['close']
+    ma5 = pd.Series(close).rolling(5).mean().values[-1]
+    ma10 = pd.Series(close).rolling(10).mean().values[-1]
+    # trend_flag = ma5 > ma10 and ma5 > ma10 * 1.01  # 5日线上穿20日线1%
+    trend_flag = ma5 > ma10   # 5日线上穿10日线
+    # 2. 量能突破
+    vol = context.data(symbol=symbol, frequency='1d', count=5, 
+                      fields='volume')['volume']
+    volume_signal = vol.iloc[-1] > np.mean(vol.iloc[:-1]) * context.volume_ratio
+    
+    # 3. MACD动量验证
+    dif, dea, _ = MACD(close)
+
+    macd_signal = dif[-1] > dea[-1] and dif[-2] < dea[-2]  # 金叉确认
+    
+    return trend_flag and volume_signal and macd_signal 
+
+
 # 使用示例
 if __name__ == "__main__":
     None

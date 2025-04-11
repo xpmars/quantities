@@ -17,8 +17,11 @@ from QTUtils import *
 
 
 def init(context):
+    # 在init中增加择时参数
     context.risk_ratio = 0.02  # 单笔风险敞口2%
     context.atr_period = 14    # ATR计算周期
+    context.trend_period = 10   # 趋势判定周期
+    context.volume_ratio = 1.1  # 量能突破阈值
 
     # 设置标的股票
     context.all_symbols = ['SHSE.600000','SHSE.688165']
@@ -58,11 +61,12 @@ def algo(context):
     for symbol in context.all_symbols:
         # 获取当前持仓
         position = account.positions(symbol=symbol, side=PositionSide_Long)
-        current_vol = position[0]['volume'] if position else 0
-        
-        # 计算目标仓位
-        current_price = position[0]['price']
-        if not current_price:
+        if position and len(position) > 0:
+            current_vol = position[0]['volume']
+            current_price = position[0]['price']
+        else:
+            current_vol = 0
+            current_price = None  # 或使用行情接口获取最新价
             continue
             
         # 获取账户总资产
@@ -107,8 +111,19 @@ def on_bar(context, bars):
     # 当日可交易总资金
     target_value = available_cash * context.total_cash_ratio 
 
+
+
+
+
+
+
+
     # 初始建仓
     if context.first[symbol] == 0 and current_price>0 :
+        if not check_timing_buy_signal(context, symbol):
+            print(f"{context.now} {symbol} 择时条件未满足，跳过建仓")
+            return
+        
         context.first[symbol] = 1
         order_value(symbol=symbol, 
                    value=target_value,
