@@ -3,7 +3,7 @@
     "activeCommit": 0,
     "commits": [
         {
-            "activePatchIndex": 27,
+            "activePatchIndex": 28,
             "patches": [
                 {
                     "date": 1744185176721,
@@ -116,6 +116,10 @@
                 {
                     "date": 1744338791724,
                     "content": "Index: \n===================================================================\n--- \n+++ \n@@ -216,10 +216,10 @@\n     close = context.data(symbol=symbol, frequency=context.frequency, \r\n                         count=context.trend_period, fields='close')['close']\r\n     ma5 = pd.Series(close).rolling(5).mean().values[-1]\r\n     ma10 = pd.Series(close).rolling(10).mean().values[-1]\r\n-    trend_flag = ma5 > ma10 and ma5 > ma10 * 1.01  # 5日线上穿20日线1%\r\n-    \r\n+    # trend_flag = ma5 > ma10 and ma5 > ma10 * 1.01  # 5日线上穿20日线1%\r\n+    trend_flag = ma5 > ma10   # 5日线上穿5日线\r\n     # 2. 量能突破\r\n     vol = context.data(symbol=symbol, frequency='1d', count=5, \r\n                       fields='volume')['volume']\r\n     volume_signal = vol.iloc[-1] > np.mean(vol.iloc[:-1]) * context.volume_ratio\r\n"
+                },
+                {
+                    "date": 1744339240842,
+                    "content": "Index: \n===================================================================\n--- \n+++ \n@@ -209,17 +209,17 @@\n     return target_shares \r\n \r\n \r\n \r\n-def check_timing_signal(context, symbol):\r\n+def check_timing_buy_signal(context, symbol):\r\n     \"\"\"三重验证择时信号\"\"\"\r\n     # 1. 趋势判定（双均线）\r\n     close = context.data(symbol=symbol, frequency=context.frequency, \r\n                         count=context.trend_period, fields='close')['close']\r\n     ma5 = pd.Series(close).rolling(5).mean().values[-1]\r\n     ma10 = pd.Series(close).rolling(10).mean().values[-1]\r\n     # trend_flag = ma5 > ma10 and ma5 > ma10 * 1.01  # 5日线上穿20日线1%\r\n-    trend_flag = ma5 > ma10   # 5日线上穿5日线\r\n+    trend_flag = ma5 > ma10   # 5日线上穿10日线\r\n     # 2. 量能突破\r\n     vol = context.data(symbol=symbol, frequency='1d', count=5, \r\n                       fields='volume')['volume']\r\n     volume_signal = vol.iloc[-1] > np.mean(vol.iloc[:-1]) * context.volume_ratio\r\n@@ -233,5 +233,6 @@\n \r\n \r\n # 使用示例\r\n if __name__ == \"__main__\":\r\n+    \r\n     None\n\\ No newline at end of file\n"
                 }
             ],
             "date": 1744185176721,
