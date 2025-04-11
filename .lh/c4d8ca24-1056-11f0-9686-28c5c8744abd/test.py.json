@@ -1,0 +1,18 @@
+{
+    "sourceFile": "c4d8ca24-1056-11f0-9686-28c5c8744abd/test.py",
+    "activeCommit": 0,
+    "commits": [
+        {
+            "activePatchIndex": 0,
+            "patches": [
+                {
+                    "date": 1744362661095,
+                    "content": "Index: \n===================================================================\n--- \n+++ \n"
+                }
+            ],
+            "date": 1744362661095,
+            "name": "Commit-0",
+            "content": "import pandas as pd\r\n\r\n# 创建一个示例 DataFrame\r\ndata = {\r\n    'Name': ['Alice', 'Bob', 'Charlie'],\r\n    'Age': [25, 30, 35],\r\n    'City': ['New York', 'Los Angeles', 'Chicago']\r\n}\r\ndf = pd.DataFrame(data)\r\n\r\n# 选择第二行（索引为 1）\r\nrow = df.iloc[1]\r\nprint(row)"
+        }
+    ]
+}
