@@ -9,9 +9,6 @@ def get_position(symbol):
         return
     return position
 
-
-
-
 # 获取当前价格
 def get_current_price(context, symbol):
     current_data = context.data(symbol=symbol, frequency=context.frequency, count=1, fields='close')
@@ -111,19 +108,15 @@ print('='*90)
 
 
 
-def calculate_ATR(context, bars, period):
-    """
-    计算平均真实波幅(ATR)
-    :param data: DataFrame格式，包含high, low, close价格数据
-    :param period: ATR计算周期
-    :return: 最新ATR值
-    """
-    # 获取数据滑窗
-    data = context.data(symbol=bars[0]['symbol'], frequency='1d', count=15)
-    high = data['high'].values
-    low = data['low'].values
-    close = data['close'].values
-    
+def calculate_ATR(context, symbol):
+    """动态仓位计算函数"""
+    # 获取ATR波动率
+    data = context.data(symbol=symbol, frequency='1d', count=context.atr_period+1, 
+                       fields='high,low,close')
+    high = data['high']
+    low = data['low']
+    close = data['close']
+    prev_close = np.roll(close, shift=1)
     # 计算真实波幅TR
     tr = np.zeros(len(data))
     for i in range(1, len(data)):
@@ -133,9 +126,11 @@ def calculate_ATR(context, bars, period):
             abs(low[i] - close[i-1])
         )
     
-    # 计算ATR（简单移动平均）
-    atr = np.convolve(tr, np.ones(period)/period, mode='valid')
-    return atr[-1] if len(atr) > 0 else 0
+    tr = np.maximum(high - low, 
+                   np.maximum(np.abs(high - prev_close), 
+                             np.abs(low - prev_close)))
+    atr = np.mean(tr[-context.atr_period:]).item()  # 标量化处理
+    return atr
 
 
 def EMA(S: np.ndarray, N: int) -> np.ndarray:
@@ -175,31 +170,14 @@ def MACD(CLOSE: np.ndarray,
 
 
 def calculate_dynamic_position(context, symbol):
+    data = context.data(symbol=symbol, frequency='1d', count=context.atr_period+1, fields='high,low,close')
     """动态仓位计算函数"""
-    # 获取ATR波动率
-    data = context.data(symbol=symbol, frequency='1d', count=context.atr_period+1, 
-                       fields='high,low,close')
-    high = data['high']
-    low = data['low']
-    close = data['close']
-    prev_close = np.roll(close, shift=1)
-    # 计算真实波幅TR
-    tr = np.zeros(len(data))
-    for i in range(1, len(data)):
-        tr[i] = max(
-            high[i] - low[i],
-            abs(high[i] - close[i-1]),
-            abs(low[i] - close[i-1])
-        )
-    
-    tr = np.maximum(high - low, 
-                   np.maximum(np.abs(high - prev_close), 
-                             np.abs(low - prev_close)))
-    atr = np.mean(tr[-context.atr_period:]).item()  # 标量化处理
+    atr = calculate_ATR(context, symbol)
     # 获取账户风险预算
     account = context.account()
     risk_budget = account.cash['nav'] * context.risk_ratio
     # 提取最新价格（标量值）
+    
     current_price = data['close'].values[-1]  # 明确取最后一个元素
     # 动态仓位计算（整手数处理）
     if atr == 0 or current_price == 0:  # 异常值保护
@@ -210,8 +188,8 @@ def calculate_dynamic_position(context, symbol):
 
 
 
-def check_timing_signal(context, symbol):
-    """三重验证择时信号"""
+def check_timing_buy_signal(context, symbol):
+    """三重验证择时信号(买)"""
     # 1. 趋势判定（双均线）
     close = context.data(symbol=symbol, frequency=context.frequency, 
                         count=context.trend_period, fields='close')['close']
@@ -222,16 +200,111 @@ def check_timing_signal(context, symbol):
     # 2. 量能突破
     vol = context.data(symbol=symbol, frequency='1d', count=5, 
                       fields='volume')['volume']
+    
+    # 关键改进：数据长度与质量校验
+    if len(vol) < 4:  # 至少需要4日数据（当前日+前3日）
+        print(f"[警告] {symbol} 成交量数据不足4日（实际：{len(vol)}）")
+        return False  # 或根据策略需求调整
+
     volume_signal = vol.iloc[-1] > np.mean(vol.iloc[:-1]) * context.volume_ratio
     
     # 3. MACD动量验证
     dif, dea, _ = MACD(close)
-
+    # 数据长度校验（MACD默认需要26周期）
+    if len(dif) < 2 or len(dea) < 2:
+        print(f"[警告] {symbol} MACD数据不足")
+        return False
+    
     macd_signal = dif[-1] > dea[-1] and dif[-2] < dea[-2]  # 金叉确认
     
     return trend_flag and volume_signal and macd_signal 
 
 
+def generate_sell_signal(context, symbol):
+    """四维量化卖出信号生成器"""
+    # ===== 数据校验层 =====
+    # 获取基础行情数据
+    data = context.data(symbol, '1d', count=50, 
+                       fields=['close', 'high', 'low', 'volume'])
+    
+    flag = data['close'].values
+    if len(flag) < 50:
+        print(f"[风控] {symbol} 历史数据不足50日")
+        return False
+    
+    # ===== 趋势反转层 =====
+    # 三重均线系统
+    ma5 = data['close'].rolling(5).mean().values
+    ma10 = data['close'].rolling(10).mean().values
+    ma20 = data['close'].rolling(20).mean().values
+    # 趋势反转条件# 均线斜率向下
+    trend_signal = (ma5[-1] < ma10[-1]) and \
+                  (ma10[-1] < ma10[-5]) and \
+                  (data['close'].iloc[-1] < ma20[-1] * 0.97)  # 收盘价破55日线3%
+
+    # if trend_signal  :
+    #     print(f"[均线斜率向下] ：{trend_signal} =========")
+
+    # ===== 量价博弈层 =====
+    # 动态量能分析
+    vol_ma10 = data['volume'].rolling(10).mean().values
+    current_vol = data['volume'].iloc[-1]  # 明确使用位置索引
+    
+    # 量价背离检测
+    price_high = data['close'].iloc[-1] > data['close'].iloc[-5:-1].max()
+    vol_low = current_vol < vol_ma10[-1] * 0.8
+    volume_signal = (price_high and vol_low) or \
+                   (current_vol > vol_ma10[-1] * 2.5 and data['close'].iloc[-1] < data['close'].iloc[-2])
+
+    if volume_signal  :
+        print(f"[量价背离] ：{volume_signal} =========")
+
+
+    # ===== 动量衰减层 =====
+    # MACD动量系统
+    dif, dea, hist = MACD(data['close'])
+    # 动量衰减条件
+    momentum_signal = (dif[-1] < dea[-1]) and \
+                     (hist[-1] < hist[-3] * 0.7) and \
+                     (dif[-1] < np.mean(dif[-10:]) * 0.9)
+    
+
+    if momentum_signal  :
+        print(f"[动能衰减] ：{momentum_signal} =========")
+
+
+    # ===== 压力位博弈层 =====
+    # 动态压力线计算
+    resistance = dynamic_resistance(data['high'])  # 实现动态压力函数
+    # 压力位博弈条件
+    price_near_resistance = data['close'].iloc[-1] > resistance * 0.985
+    false_break = (data['close'].iloc[-3] > resistance) and \
+                 (data['close'].iloc[-1] < resistance * 0.97)
+    pressure_signal = price_near_resistance or false_break
+
+    if pressure_signal  :
+            print(f"[压力位博弈] ：{pressure_signal} =========")
+
+
+    # ===== 复合信号生成 =====
+    # 四重条件触发机制
+
+    # 初始值 3
+    if (trend_signal + volume_signal + momentum_signal + pressure_signal) >= 2:
+        # 附加波动率过滤
+        atr = calculate_ATR(context, symbol)  # 实现ATR计算
+        if (data['close'].iloc[-1] - data['close'].iloc[-5])/data['close'].iloc[-5] < atr * 2:
+            return True
+    return False
+
+
+
+def dynamic_resistance(high_series):
+    """动态压力线计算"""
+    return high_series.rolling(30).max().shift(1).iloc[-1] * 0.987
+
+
 # 使用示例
 if __name__ == "__main__":
+    
     None

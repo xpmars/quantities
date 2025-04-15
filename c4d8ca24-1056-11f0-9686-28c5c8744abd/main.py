@@ -17,12 +17,6 @@ from QTUtils import *
 
 
 def init(context):
-    # 在init中增加择时参数
-    context.risk_ratio = 0.02  # 单笔风险敞口2%
-    context.atr_period = 14    # ATR计算周期
-    context.trend_period = 10   # 趋势判定周期
-    context.volume_ratio = 1.1  # 量能突破阈值
-
     # 设置标的股票
     context.all_symbols = ['SHSE.600000','SHSE.688165']
     # 用于判定第一个仓位是否成功开仓
@@ -35,19 +29,35 @@ def init(context):
     context.total_cash_ratio = 0.25  # 总仓位占账户资金的50%
     # 每次交易资金比例（日内回转比例）
     context.trade_cash_ratio = 0.1  # 每次交易账户可用资金的10%
-    # 使用的频率，60s为1分钟bar，300s为5分钟bar
+    # MACD日内分时使用的频率，60s为1分钟bar，300s为5分钟bar
     context.frequency = '300s'
-    # 回溯数据长度（计算MACD)
+    # MACD日内分时回溯数据长度（计算MACD)
     context.periods_time = 1000
-    # 订阅数据
+
+    # 在init中增加择时参数
+    context.risk_ratio = 0.02  # 单笔风险敞口2%
+    context.atr_period = 14    # ATR计算周期
+    context.trend_period = 10   # 趋势判定周期
+    context.volume_ratio = 1.2  # 量能突破阈值
+
+    # 在策略初始化中设置
+    context.sell_params = {
+    'atr_multiplier': 2.2,      # AR波动过滤系数
+    'resistance_buffer': 0.985, # 压力位检测缓冲
+    'volume_threshold': 2.3     # 放量下跌阈值
+    }
+
+    
+    # 订阅数据日内分时数据
     subscribe(symbols=context.all_symbols,
               frequency=context.frequency,
               count=context.periods_time,
               fields='symbol,eob,close')
-    # 订阅标的的日线数据，窗口长度设为15（14周期ATR+1）
+    # 订阅标的的日线数据，窗口长度设为55（14周期ATR+1）
     subscribe(symbols=context.all_symbols,
               frequency='1d',
-              count=15)
+              count=55)
+
 
     # 初始化ATR值存储到上下文
     context.atr_value = None
@@ -56,7 +66,6 @@ def init(context):
 
 def algo(context):
     ''' 独立定时调仓函数 '''
-    print("\n[尾盘调仓启动]")
     account = context.account()
     for symbol in context.all_symbols:
         # 获取当前持仓
@@ -78,6 +87,7 @@ def algo(context):
         
         # 执行调仓
         delta = target_vol - current_vol
+        print("\n[尾盘调仓启动]")
         if delta > 0:
             order_volume(symbol=symbol, 
                         volume=delta,
@@ -112,13 +122,7 @@ def on_bar(context, bars):
     target_value = available_cash * context.total_cash_ratio 
 
 
-
-
-
-
-
-
-    # 初始建仓
+    # 初始建仓(择时建仓)
     if context.first[symbol] == 0 and current_price>0 :
         if not check_timing_buy_signal(context, symbol):
             print(f"{context.now} {symbol} 择时条件未满足，跳过建仓")
@@ -133,13 +137,6 @@ def on_bar(context, bars):
         print(f'{context.now}：{symbol}建底仓，投入资金={target_value:.2f}')
         return
 
-#     # 计算ATR
-#     atr = calculate_ATR(context, bars, period=14)
-#     # 存储当前ATR值到上下文
-#     context.atr_value = atr
-#    # 打印带日期的ATR值（保留2位小数）
-#     print(f"[{context.now}] {bars[0]['symbol']} ATR值: {atr:.4f}")  # 修改这里
-
     # 日内交易
     # 本次（单次）可交易总资金
     trade_value = available_cash * context.trade_cash_ratio
@@ -149,8 +146,9 @@ def on_bar(context, bars):
     # 修改on_bar中的交易量计算（新增动态交易量）
     trade_value = min(available_cash * context.trade_cash_ratio,
                     calculate_dynamic_position(context, symbol) * current_price) 
-    print(f"[本次交易量] 计划交易量={available_cash * context.trade_cash_ratio:.2f}元 | 动态交易量={calculate_dynamic_position(context, symbol) * current_price:.2f}元 | 实际交易量={trade_value:.2f}")
-
+    print(f"[本次交易量] 计划交易量={available_cash * context.trade_cash_ratio:.2f}元 \
+        | 动态交易量={calculate_dynamic_position(context, symbol) * current_price:.2f}元 \
+        | 实际交易量={trade_value:.2f}")
 
     close = context.data(symbol=symbol,
                         frequency=context.frequency,
@@ -171,6 +169,37 @@ def on_bar(context, bars):
                        side=OrderSide_Sell,
                        order_type=OrderType_Market,
                        position_effect=PositionEffect_Close)
+            
+
+
+    # 分层卖出执行（减持）
+    if generate_sell_signal(context, symbol):
+        daily_data_close = context.data(symbol=symbol,
+                                frequency='1d',
+                                count=55,
+                                fields='close')['close'].values
+        # 第一层：触发基础信号
+        print(f"====触发第1层卖出信号====，减持30%" )
+        order_target_percent(symbol=symbol, percent=0.7,
+                             position_side=PositionSide_Short,
+                             order_type=OrderType_Market)  # 减持30%
+        # 第二层：MACD零轴下强化
+        dif, dea, _ = MACD(daily_data_close)
+        if dif[-1] < 0:  
+            print(f"====触发第2层卖出信号====，减持20%" )
+            order_target_percent(symbol=symbol,percent=0.5,
+                        position_side=PositionSide_Short,
+                        order_type=OrderType_Market)  # 减持30%
+            
+        # 第三层：周线级别确认
+        # 获取近一周收盘价（网页9周线处理逻辑）
+        weekly_close = np.mean(daily_data_close[-5:]) if len(daily_data_close)>=5 else None
+        daily_ma20 = np.mean(context.daily_close[-20:])
+        if weekly_close < daily_ma20:
+            print(f"====触发第3层卖出信号====，清仓" )
+            order_target_percent(percent=0.0,
+                        position_side=PositionSide_Short,
+                        order_type=OrderType_Market)  # 减持30%
 
 
 
