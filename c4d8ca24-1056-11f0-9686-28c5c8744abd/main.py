@@ -21,6 +21,14 @@ def init(context):
     context.all_symbols = ['SHSE.600000','SHSE.688165']
     # 用于判定第一个仓位是否成功开仓
     context.first = {symbol:0 for symbol in context.all_symbols}
+     # 新增交易状态锁
+    context.trading_blocked = {
+        symbol: {
+            'status': False,          # 交易锁状态
+            'expire_time': None       # 过期时间
+        } for symbol in context.all_symbols
+    }
+
     # 需要保持的总仓位
     # context.total = 50000
     # 日内回转每次交易数量
@@ -40,6 +48,9 @@ def init(context):
     context.trend_period = 10   # 趋势判定周期
     context.volume_ratio = 1.2  # 量能突破阈值
 
+    # 初始化ATR值存储到上下文
+    context.atr_value = None
+
     # 在策略初始化中设置
     context.sell_params = {
     'atr_multiplier': 2.2,      # AR波动过滤系数
@@ -58,52 +69,13 @@ def init(context):
               frequency='1d',
               count=55)
 
-
-    # 初始化ATR值存储到上下文
-    context.atr_value = None
+    # # 新增10:01定时卖出任务
+    # schedule(schedule_func=daily_sell, 
+    #         date_rule='1d', 
+    #         time_rule='10:00:00')  # 网页8同花顺定时策略参考
 
     schedule(schedule_func=algo, date_rule='1d', time_rule='14:55:00')
 
-def algo(context):
-    ''' 独立定时调仓函数 '''
-    account = context.account()
-    for symbol in context.all_symbols:
-        # 获取当前持仓
-        position = account.positions(symbol=symbol, side=PositionSide_Long)
-        if position and len(position) > 0:
-            current_vol = position[0]['volume']
-            current_price = position[0]['price']
-        else:
-            current_vol = 0
-            current_price = None  # 或使用行情接口获取最新价
-            continue
-            
-        # 获取账户总资产
-        available_cash = account.cash['nav']
-        # 当日可交易总资金
-        target_value = available_cash * context.total_cash_ratio 
-        # 当日交易股票数
-        target_vol = math.ceil((target_value / current_price) / 200) * 200  # 整手数
-        
-        # 执行调仓
-        delta = target_vol - current_vol
-        print("\n[尾盘调仓启动]")
-        if delta > 0:
-            order_volume(symbol=symbol, 
-                        volume=delta,
-                        side=OrderSide_Buy,
-                        order_type=OrderType_Limit,
-                        price=current_price*1.005,  # 限价避免滑点
-                        position_effect=PositionEffect_Open)
-        elif delta < 0:
-            order_volume(symbol=symbol,
-                        volume=abs(delta),
-                        side=OrderSide_Sell,
-                        order_type=OrderType_Limit,
-                        price=current_price*0.995,
-                        position_effect=PositionEffect_Close)
-    
-    # eod_position_summary(context)
 
 
 # 订阅行情
@@ -124,10 +96,15 @@ def on_bar(context, bars):
 
     # 初始建仓(择时建仓)
     if context.first[symbol] == 0 and current_price>0 :
+        # 重置交易锁
+        if context.trading_blocked[symbol]['status']:
+            unlock_trading(context, symbol)
+            print(f"{symbol} ======新建仓触发交易锁解除=======")
+
         if not check_timing_buy_signal(context, symbol):
             print(f"{context.now} {symbol} 择时条件未满足，跳过建仓")
             return
-        
+        # 表示持仓该股票
         context.first[symbol] = 1
         order_value(symbol=symbol, 
                    value=target_value,
@@ -136,6 +113,16 @@ def on_bar(context, bars):
                    position_effect=PositionEffect_Open)
         print(f'{context.now}：{symbol}建底仓，投入资金={target_value:.2f}')
         return
+
+
+    # # 在交易信号触发前增加锁状态检查
+
+    
+    if context.trading_blocked[symbol]['status'] and \
+        context.trading_blocked[symbol]['expire_time'] < context.now:
+        # print(f"{context.now} {symbol} 交易锁生效，跳过日内回转")
+        return
+
 
     # 日内交易
     # 本次（单次）可交易总资金
@@ -146,30 +133,30 @@ def on_bar(context, bars):
     # 修改on_bar中的交易量计算（新增动态交易量）
     trade_value = min(available_cash * context.trade_cash_ratio,
                     calculate_dynamic_position(context, symbol) * current_price) 
-    print(f"[本次交易量] 计划交易量={available_cash * context.trade_cash_ratio:.2f}元 \
-        | 动态交易量={calculate_dynamic_position(context, symbol) * current_price:.2f}元 \
-        | 实际交易量={trade_value:.2f}")
+    # print(f"[本次交易量] 计划交易量={available_cash * context.trade_cash_ratio:.2f}元 \
+    #     | 动态交易量={calculate_dynamic_position(context, symbol) * current_price:.2f}元 \
+    #     | 实际交易量={trade_value:.2f}")
 
     close = context.data(symbol=symbol,
                         frequency=context.frequency,
                         count=context.periods_time,
                         fields='close')['close'].values
     dif, dea, _ = MACD(close)
-    if dif[-2] <= dea[-2] and dif[-1] > dea[-1] :  # 日内金叉
+    if dif[-2] <= dea[-2] and dif[-1] > dea[-1] and check_trading_permission(context, symbol):  # 日内金叉
         if trade_volume >0:
             order_value(symbol=symbol,
                        value=trade_value,
                        side=OrderSide_Buy,
                        order_type=OrderType_Market,
                        position_effect=PositionEffect_Open)
-    elif dif[-2] >= dea[-2] and dif[-1] < dea[-1]:  # 日内死叉
+    elif dif[-2] >= dea[-2] and dif[-1] < dea[-1] and check_trading_permission(context, symbol):  # 日内死叉
         if trade_volume >0:
             order_value(symbol=symbol,
                        value=trade_value,
                        side=OrderSide_Sell,
                        order_type=OrderType_Market,
                        position_effect=PositionEffect_Close)
-            
+
 
 
     # 分层卖出执行（减持）
@@ -183,6 +170,10 @@ def on_bar(context, bars):
         order_target_percent(symbol=symbol, percent=0.7,
                              position_side=PositionSide_Short,
                              order_type=OrderType_Market)  # 减持30%
+                             
+        on_order_status
+        lock_trading(context, symbol)
+        
         # 第二层：MACD零轴下强化
         dif, dea, _ = MACD(daily_data_close)
         if dif[-1] < 0:  
@@ -190,18 +181,23 @@ def on_bar(context, bars):
             order_target_percent(symbol=symbol,percent=0.5,
                         position_side=PositionSide_Short,
                         order_type=OrderType_Market)  # 减持30%
+            lock_trading(context, symbol)
             
         # 第三层：周线级别确认
         # 获取近一周收盘价（网页9周线处理逻辑）
         weekly_close = np.mean(daily_data_close[-5:]) if len(daily_data_close)>=5 else None
-        daily_ma20 = np.mean(context.daily_close[-20:])
+        daily_ma20 = np.mean(daily_data_close[-20:])
         if weekly_close < daily_ma20:
             print(f"====触发第3层卖出信号====，清仓" )
-            order_target_percent(percent=0.0,
+            temp = order_target_percent(symbol=symbol,percent=0.0,
                         position_side=PositionSide_Short,
-                        order_type=OrderType_Market)  # 减持30%
-
-
+                        order_type=OrderType_Market)  
+            print(temp)
+            lock_trading(context, symbol)
+            # 清仓标记
+            context.first[symbol] = 0
+            eod_position_summary(context);
+        
 
 def on_order_status(context, order):
     # 标的代码

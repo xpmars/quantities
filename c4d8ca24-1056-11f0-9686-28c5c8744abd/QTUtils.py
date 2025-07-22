@@ -1,6 +1,9 @@
 import pandas as pd
 import numpy as np
-
+import datetime
+from gm.api import *
+import math
+import datetime
 # 获取持仓
 def get_position(symbol):
     position = list(filter(lambda x:x['symbol']==symbol,get_position()))
@@ -242,8 +245,8 @@ def generate_sell_signal(context, symbol):
                   (ma10[-1] < ma10[-5]) and \
                   (data['close'].iloc[-1] < ma20[-1] * 0.97)  # 收盘价破55日线3%
 
-    # if trend_signal  :
-    #     print(f"[均线斜率向下] ：{trend_signal} =========")
+    if trend_signal  :
+        print(f"[均线斜率向下] trend_signal = {trend_signal} =========")
 
     # ===== 量价博弈层 =====
     # 动态量能分析
@@ -257,7 +260,7 @@ def generate_sell_signal(context, symbol):
                    (current_vol > vol_ma10[-1] * 2.5 and data['close'].iloc[-1] < data['close'].iloc[-2])
 
     if volume_signal  :
-        print(f"[量价背离] ：{volume_signal} =========")
+        print(f"[量价背离] volume_signal = ：{volume_signal} =========")
 
 
     # ===== 动量衰减层 =====
@@ -267,11 +270,8 @@ def generate_sell_signal(context, symbol):
     momentum_signal = (dif[-1] < dea[-1]) and \
                      (hist[-1] < hist[-3] * 0.7) and \
                      (dif[-1] < np.mean(dif[-10:]) * 0.9)
-    
-
     if momentum_signal  :
-        print(f"[动能衰减] ：{momentum_signal} =========")
-
+        print(f"[动量衰减条件] momentum_signal = ：{momentum_signal} =========")
 
     # ===== 压力位博弈层 =====
     # 动态压力线计算
@@ -283,25 +283,130 @@ def generate_sell_signal(context, symbol):
     pressure_signal = price_near_resistance or false_break
 
     if pressure_signal  :
-            print(f"[压力位博弈] ：{pressure_signal} =========")
+        print(f"[压力位博弈层] pressure_signal = ：{pressure_signal} =========")
 
 
     # ===== 复合信号生成 =====
     # 四重条件触发机制
-
     # 初始值 3
-    if (trend_signal + volume_signal + momentum_signal + pressure_signal) >= 2:
+    if (trend_signal + volume_signal + momentum_signal + pressure_signal) >= 1:
         # 附加波动率过滤
         atr = calculate_ATR(context, symbol)  # 实现ATR计算
         if (data['close'].iloc[-1] - data['close'].iloc[-5])/data['close'].iloc[-5] < atr * 2:
             return True
     return False
 
-
-
 def dynamic_resistance(high_series):
     """动态压力线计算"""
     return high_series.rolling(30).max().shift(1).iloc[-1] * 0.987
+
+def check_trading_permission(context, symbol):
+    """添加类型校验"""
+    status_data = context.trading_blocked.get(symbol, {})
+    if isinstance(status_data, bool):
+        # 兼容旧版布尔值初始化
+        context.trading_blocked[symbol] = {
+            'status': status_data,
+            'expire_time': None
+        }
+    return not status_data.get('status', True)
+
+def lock_trading(context, symbol, hours=24):
+    """锁定交易并记录过期时间"""
+    context.trading_blocked[symbol] = {
+        'status': True,
+        'expire_time': context.now + datetime.timedelta(hours=hours)
+    }
+    print(f"====lock_trading锁定交易并记录过期时间=========" )
+
+def unlock_trading(context, symbol):
+    """解除交易锁"""
+    context.trading_blocked[symbol] = {
+        'status': False,
+        'expire_time': None
+    }
+    print(f"====unlock_trading解锁交易并记录过期时间==========" )
+
+def algo(context):
+    ''' 尾盘调仓启动] '''
+    account = context.account()
+    for symbol in context.all_symbols:
+        # 获取当前持仓
+        position = account.positions(symbol=symbol, side=PositionSide_Long)
+        if position and len(position) > 0:
+            current_vol = position[0]['volume']
+            current_price = position[0]['price']
+        else:
+            current_vol = 0
+            current_price = None  # 或使用行情接口获取最新价
+            continue
+            
+        # 获取账户总资产
+        available_cash = account.cash['nav']
+        # 当日可交易总资金
+        target_value = available_cash * context.total_cash_ratio 
+        # 当日交易股票数
+        target_vol = math.ceil((target_value / current_price) / 200) * 200  # 整手数
+        
+        # 执行调仓
+        delta = target_vol - current_vol
+        
+        if delta > 0:
+            order_volume(symbol=symbol, 
+                        volume=delta,
+                        side=OrderSide_Buy,
+                        order_type=OrderType_Limit,
+                        price=current_price*1.005,  # 限价避免滑点
+                        position_effect=PositionEffect_Open)
+            print(f"\n===== [尾盘调仓启动]{symbol} 定时买入{target_vol}股 | 限价{current_price*0.995:.2f}" )
+        elif delta < 0:
+            order_volume(symbol=symbol,
+                        volume=abs(delta),
+                        side=OrderSide_Sell,
+                        order_type=OrderType_Limit,
+                        price=current_price*0.995,
+                        position_effect=PositionEffect_Close)
+            print(f"\n===== [尾盘调仓启动]{symbol} 定时卖出{target_vol}股 | 限价{current_price*0.995:.2f}" )
+    
+    # eod_position_summary(context)
+
+def daily_sell(context):
+    """每日10:01卖出持仓的1/5"""
+    account = context.account()
+    print(f"\n===== {context.now} 定时卖出启动 =====")
+    
+    for symbol in context.all_symbols:
+        # 检查交易锁状态（网页4风控逻辑）
+        if context.trading_blocked[symbol]['status']:
+            print(f"{symbol} 交易锁生效中，跳过卖出")
+            continue
+        # 获取当前持仓
+        position = account.positions(symbol=symbol, side=PositionSide_Long)
+        if position and len(position) > 0:
+            current_vol = position[0]['volume']
+            current_price = position[0]['price']
+        else:
+            current_vol = 0
+            current_price = None  # 或使用行情接口获取最新价
+            continue
+            
+        # 计算可卖数量（网页3仓位管理建议）
+        current_vol = position[0]['volume']
+        sell_vol = math.ceil(current_vol / 10 / 100) * 100  # 取整手数（A股100股整数倍）
+        
+        if sell_vol <= 0:
+            print(f"{symbol} 持仓不足5手，无法执行1/5卖出")
+            continue
+            
+        # 执行限价卖出（网页6避免滑点建议）
+        order_volume(symbol=symbol,
+                    volume=sell_vol,
+                    side=OrderSide_Sell,
+                    order_type=OrderType_Limit,
+                    price=current_price*0.995,  # 设置99.5%限价单
+                    position_effect=PositionEffect_Close)
+        
+        print(f"{symbol} 定时卖出{sell_vol}股 | 限价{current_price*0.995:.2f}")
 
 
 # 使用示例
