@@ -77,7 +77,7 @@ def get_limit_up_stocks():
             
             # 筛选涨停股票 (考虑0.1%的价格误差)
             if not hist_data.empty:
-                print(f"API返回字段: {hist_data.columns.tolist()}")
+                # print(f"API返回字段: {hist_data.columns.tolist()}")
                 # 按股票分组并计算涨停
                 for symbol, group in hist_data.groupby('symbol'):
                     # 获取前两天收盘价
@@ -110,14 +110,10 @@ def get_limit_up_stocks():
             # 使用get_instruments获取股票基本信息
             instrument = gm.get_instruments(symbols=symbol, df=True)
             # 打印API返回的所有列名，用于调试
-            print(f"API返回的字段: {instrument.columns.tolist()}")
+            # print(f"API返回的字段: {instrument.columns.tolist()}")
             # 尝试使用不同的字段名获取股票名称
-            if 'stock_name' in instrument.columns:
-                stock_name = instrument['stock_name'].values[0] if not instrument.empty else '未知'
-            elif 'name' in instrument.columns:
-                stock_name = instrument['name'].values[0] if not instrument.empty else '未知'
-            elif 'display_name' in instrument.columns:
-                stock_name = instrument['display_name'].values[0] if not instrument.empty else '未知'
+            if 'sec_name' in instrument.columns:
+                stock_name = instrument['sec_name'].values[0] if not instrument.empty else '未知'
             else:
                 stock_name = '未知'
                 print(f"无法找到股票名称字段: {symbol}, 可用字段: {instrument.columns.tolist()}")
